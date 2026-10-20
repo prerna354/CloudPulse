@@ -1,0 +1,13 @@
+.env
+*.db
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+dist/
+build/
+coverage/
+.pytest_cache/
+.vscode/
+celerybeat-schedule*
