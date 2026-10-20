@@ -1,147 +1,334 @@
 # CloudPulse
 
-A distributed service-monitoring platform: it checks your services in the background, detects failures, raises alerts, and streams live updates to a dashboard.
+> Distributed service monitoring platform for detecting slowdowns, failures, and service recovery in real time.
 
-## Overview
-CloudPulse watches HTTP services (APIs, websites, internal tools). Background workers probe each service on a schedule, store the results, decide whether it is **up**, **degraded** or **down**, open alerts, and push the changes to every open browser instantly.
+CloudPulse is a Dockerized full-stack monitoring platform that continuously checks HTTP services, classifies their health, manages alerts, stores monitoring history, and streams live status updates to a React dashboard.
 
-## Problem Statement
-Teams often learn about outages from customers, not from their tools. Health data is scattered, checking by hand does not scale, and when something breaks it is hard to see what failed and when.
+## Why CloudPulse?
 
-## Solution
-Scheduled checks run in parallel on Celery workers, results are stored in PostgreSQL, hot data is cached in Redis, and WebSockets deliver live status to a React dashboard. A service is only declared *down* after 3 failed checks in a row, so one dropped request does not cause a false alarm.
+Teams often discover outages from users rather than from their own monitoring systems. Manual health checks do not scale, and without historical results it is difficult to understand when a service became unhealthy or recovered.
+
+CloudPulse automates the monitoring lifecycle:
+
+**Schedule checks → Probe services → Classify status → Store results → Manage alerts → Stream live updates**
 
 ## Key Features
-- Scheduled, parallel health checks (Celery worker + beat)
-- Failure detection: `up` / `degraded` (slow or first failure) / `down` (3 failures in a row)
-- Automatic alerts that open on failure and resolve on recovery
-- Real-time dashboard updates over WebSockets (Redis pub/sub bridges workers to the API)
-- Redis caching of dashboard statistics
-- JWT authentication, role-based access (admin / viewer), login rate limiting
-- Search, status filter, pagination, response-time chart, confirmation dialogs, toasts
-- Interactive API docs (Swagger) at `/docs`
+
+- Continuous HTTP monitoring using scheduled Celery tasks
+- Health classification: `UP`, `DEGRADED`, and `DOWN`
+- Failure tolerance: service becomes `DOWN` after 3 consecutive failures
+- Alert lifecycle management with escalation and recovery
+- Real-time dashboard updates using WebSockets and Redis pub/sub
+- Historical monitoring data stored in PostgreSQL
+- Redis caching for dashboard statistics
+- JWT authentication with admin/viewer roles
+- Login rate limiting
+- Service search, filtering, pagination, and response-time history
+- Docker Compose orchestration
+- Interactive FastAPI Swagger documentation
 
 ## System Architecture
-```
- React dashboard ──HTTP──▶ FastAPI ──▶ PostgreSQL
-        ▲                     │  ▲
-        │ WebSocket           │  └── Redis (cache + pub/sub)
-        └──── FastAPI ◀───────┘            ▲
-                                           │ publish events
- Celery beat ──every 15s──▶ Redis queue ──▶ Celery workers ──▶ probe services ──▶ PostgreSQL
-```
-1. **Celery beat** wakes up every 15 s and queues a check for each service that is due.
-2. **Workers** probe the URL, save the result, update status, open/resolve alerts.
-3. Workers **publish** an event to Redis; the API **forwards** it over WebSockets to the browser.
 
-## Technology Stack
-| Layer | Technology | Why |
-|---|---|---|
-| Frontend | React + Vite | Fast SPA, live UI |
-| API | FastAPI, Pydantic | Typed validation, auto docs |
-| Database | PostgreSQL (SQLite for quick local use), SQLAlchemy 2 | Relational history of checks |
-| Background jobs | Celery + Redis | Parallel checks without blocking the API |
-| Real time | WebSockets + Redis pub/sub | Instant dashboard updates |
-| Packaging | Docker Compose | One-command run |
+```text
+                    +----------------------+
+                    |    React + Vite      |
+                    |      Dashboard       |
+                    +----------+-----------+
+                               |
+                         HTTP / WebSocket
+                               |
+                               v
+                    +----------------------+
+                    |       FastAPI        |
+                    | REST + WebSocket API |
+                    +----+------------+----+
+                         |            |
+                    SQLAlchemy      Redis
+                         |        cache/pubsub
+                         v            ^
+                 +---------------+    |
+                 |  PostgreSQL   |    |
+                 | users         |    |
+                 | services      |    |
+                 | checks        |    |
+                 | alerts        |    |
+                 +---------------+    |
+                                      |
+                               publish events
+                                      ^
+                                      |
+                 +--------------------+------+
+                 |                           |
+          +------+-------+            +------+-------+
+          | Celery Beat  |            |    Redis     |
+          | every 15 sec |----------->| task broker  |
+          +--------------+            +------+-------+
+                                             |
+                                             v
+                                    +----------------+
+                                    | Celery Worker  |
+                                    | async checks   |
+                                    +-------+--------+
+                                            |
+                                       HTTP probes
+                                            |
+                                            v
+                                  +-------------------+
+                                  | Monitored Services|
+                                  +-------------------+
 
-## Project Structure
-```
+Monitoring Flow
+1. Celery Beat identifies services that are due for a check.
+2. Celery workers execute checks asynchronously.
+3. The response is evaluated using status code, response time, and consecutive failures.
+4. The result is stored in PostgreSQL.
+5. CloudPulse calculates the service state.
+6. The alert engine opens, escalates, or resolves incidents.
+7. Workers publish events through Redis.
+8. FastAPI forwards live events through WebSockets to connected dashboards.
+Alert Lifecycle
+UP
+ |
+ | slow / failed check
+ v
+DEGRADED
+ |
+ | continued failures
+ v
+DOWN
+ |
+ | recovery
+ v
+UP
+ |
+ +----> active alert resolved
+
+CloudPulse maintains an active incident per service and supports alert escalation from warning to critical instead of creating duplicate active incidents.
+Technology Stack
+Layer	Technology	Purpose
+Frontend	React, Vite	Monitoring dashboard
+Backend	FastAPI, Pydantic	REST API and WebSockets
+Database	PostgreSQL, SQLAlchemy 2	Monitoring history and application data
+Background Processing	Celery	Asynchronous health checks
+Scheduler	Celery Beat	Periodic monitoring jobs
+Cache / Messaging	Redis	Cache and pub/sub
+Authentication	JWT, bcrypt	Authentication and authorization
+Infrastructure	Docker Compose	Multi-service deployment
+Testing	pytest, unittest	API and monitoring logic
+
+
+Project Structure
 cloudpulse/
 ├── backend/
 │   ├── app/
-│   │   ├── main.py            # app, CORS, error handlers, WebSocket
-│   │   ├── models.py          # SQLAlchemy tables
-│   │   ├── schemas.py         # request/response validation
-│   │   ├── security.py        # password hashing, JWT
-│   │   ├── routers/           # auth, services, alerts, dashboard, demo
-│   │   ├── services/          # status_logic (pure), monitoring, ws_manager
-│   │   ├── tasks/             # Celery app + check tasks
-│   │   └── seed.py            # demo data
+│   │   ├── main.py
+│   │   ├── models.py
+│   │   ├── schemas.py
+│   │   ├── security.py
+│   │   ├── database.py
+│   │   ├── redis_client.py
+│   │   ├── routers/
+│   │   │   ├── auth.py
+│   │   │   ├── services.py
+│   │   │   ├── alerts.py
+│   │   │   ├── dashboard.py
+│   │   │   └── demo.py
+│   │   ├── services/
+│   │   │   ├── monitoring.py
+│   │   │   ├── status_logic.py
+│   │   │   └── ws_manager.py
+│   │   └── tasks/
+│   │       ├── celery_app.py
+│   │       └── checks.py
 │   └── tests/
-├── frontend/src/              # React app
-├── docs/
+├── frontend/
+│   └── src/
 ├── docker-compose.yml
-└── .env.example
-```
+├── .env.example
+├── .gitignore
+├── LICENSE
+└── README.md
 
-## Database Design
-- **users** (id, email UNIQUE, full_name, hashed_password, role, created_at)
-- **monitored_services** (id, name UNIQUE, url, check_interval_seconds, timeout_ms, is_active, status INDEXED, consecutive_failures, last_checked_at, last_response_ms)
-- **check_results** (id, service_id FK→services ON DELETE CASCADE, checked_at, is_up, status_code, response_ms, error) — composite index `(service_id, checked_at)`
-- **alerts** (id, service_id FK→services ON DELETE CASCADE, severity, message, created_at, resolved_at, acknowledged) — index `(service_id, resolved_at)`
+Database Design
+CloudPulse uses four primary entities.
+Users
+Stores users, roles, password hashes, and account metadata.
+Monitored Services
+Stores:
+- Service name
+- Target URL
+- Check interval
+- Timeout
+- Current status
+- Consecutive failures
+- Last check time
+- Last response time
+Check Results
+Stores each monitoring observation:
+- Service
+- Timestamp
+- Availability
+- HTTP status code
+- Response time
+- Error information
+Alerts
+Stores monitoring incidents:
+- Service
+- Severity
+- Message
+- Creation time
+- Acknowledgement state
+- Resolution time
+API
+Interactive API documentation:
+http://localhost:8000/docs
 
-One service has many check results and many alerts.
+Core Endpoints
+Method	Endpoint	Purpose
+POST	/api/auth/register	Register viewer
+POST	/api/auth/login	Authenticate and obtain JWT
+GET	/api/auth/me	Current user
+GET	/api/services	List/search/filter services
+POST	/api/services	Create monitored service
+PATCH	/api/services/{service_id}	Update service
+DELETE	/api/services/{service_id}	Delete service
+GET	/api/services/{service_id}/results	View check history
+GET	/api/alerts	View alerts
+POST	/api/alerts/{alert_id}/acknowledge	Acknowledge alert
+GET	/api/dashboard/summary	Dashboard statistics
+GET	/api/health	Backend health
+WS	/ws?token=...	Live monitoring events
 
-## API Documentation
-Full interactive docs: http://localhost:8000/docs. Auth = `Authorization: Bearer <token>`.
 
-| Method | URL | Purpose | Auth | Errors |
-|---|---|---|---|---|
-| POST | `/api/auth/register` | Create a viewer account `{email, full_name, password}` | none | 409 duplicate, 422 invalid, 429 |
-| POST | `/api/auth/login` | Get a token `{email, password}` | none | 401 wrong credentials, 429 |
-| GET | `/api/auth/me` | Current user | any | 401 |
-| GET | `/api/services?q=&status=&page=&page_size=` | List/search/filter services | any | 401, 422 |
-| POST | `/api/services` | Add a service `{name, url, check_interval_seconds, timeout_ms}` | admin | 403, 409, 422 |
-| GET | `/api/services/{id}` | One service | any | 404 |
-| PATCH | `/api/services/{id}` | Edit a service | admin | 403, 404, 409 |
-| DELETE | `/api/services/{id}` | Delete (204) | admin | 403, 404 |
-| GET | `/api/services/{id}/results?limit=` | Recent checks | any | 404 |
-| GET | `/api/alerts?active_only=&page=` | List alerts | any | 401 |
-| POST | `/api/alerts/{id}/acknowledge` | Acknowledge | any | 404 |
-| GET | `/api/dashboard/summary` | Counts, uptime, avg response (cached 5 s) | any | 401 |
-| GET | `/api/health` | Liveness | none | |
-| WS | `/ws?token=` | Live events | any | closes with 4401 if token invalid |
-| GET | `/api/demo/{ok,slow,flaky,down}` | Built-in targets to monitor | none | |
+Demo Monitoring Targets
+/api/demo/ok
+/api/demo/slow
+/api/demo/flaky
+/api/demo/down
 
-## Authentication
-Passwords are hashed with bcrypt. Login returns a signed JWT (HS256, 60 min). "Logout" removes the token in the browser. Admins can add/edit/delete services; viewers can only read.
+These endpoints allow the monitoring lifecycle to be demonstrated without external dependencies.
+Authentication & Authorization
+CloudPulse uses:
+- bcrypt password hashing
+- signed JWT access tokens
+- admin/viewer roles
+- login rate limiting
+Admins can create, edit, and delete monitored services.
 
-## Installation
-Requirements: Python 3.12, Node.js 20+, Git. Docker Desktop for the full stack (Redis + Postgres).
+Viewers can view monitoring data and alerts.
 
-## Environment Variables
-See `.env.example` (Docker) and `backend/.env.example` (no Docker). Never commit real `.env` files.
+Real credentials are supplied through environment variables and are excluded from version control.
+Running with Docker
+Prerequisites
+- Docker Desktop
+- Git
+1. Clone
+git clone https://github.com/prerna354/CloudPulse.git
+cd CloudPulse
 
-## Running Locally
-**Option A, Docker (recommended: includes Redis, Celery, PostgreSQL)**
-```bash
-cp .env.example .env        # then edit the values
+2. Configure Environment
+PowerShell:
+Copy-Item .env.example .env
+
+Edit .env and replace the placeholder values with your own secrets.
+3. Start CloudPulse
 docker compose up --build
-```
-**Option B, without Docker (API + dashboard only):**
-```bash
-cd backend && python -m venv .venv && .venv\Scripts\activate
-pip install -r requirements.txt
-copy .env.example .env      # edit values
-python -m app.seed
-uvicorn app.main:app --reload
-# new terminal
-cd frontend && npm install && npm run dev
-```
-Without Redis there are no live background checks (they need the Celery worker + Redis), but you can browse the seeded data and use every page.
 
-Open http://localhost:5173.
+The stack includes:
+- React frontend
+- FastAPI backend
+- PostgreSQL
+- Redis
+- Celery worker
+- Celery Beat
+4. Open the Application
+Dashboard:
+http://localhost:5173
 
-## Running with Docker
-`docker compose up --build` builds the backend and frontend images, starts PostgreSQL and Redis, creates tables and demo data, then starts the API, a Celery worker, Celery beat and the dashboard.
+API documentation:
+http://localhost:8000/docs
 
-## Testing
-```bash
+Environment Variables
+The repository includes a safe environment template:
+.env.example
+
+Typical variables:
+POSTGRES_PASSWORD=
+SECRET_KEY=
+SEED_ADMIN_PASSWORD=
+SEED_VIEWER_PASSWORD=
+
+Never commit a real .env file or production credentials.
+Testing
+Run monitoring status tests:
 cd backend
-python -m unittest tests.test_status_logic -v   # pure logic, no packages needed
-pytest                                           # API + integration tests
-```
+python -m unittest tests.test_status_logic -v
 
-## Sample Credentials
-Created by the seed script using the passwords you put in `.env`:
-- Admin: `admin@cloudpulse.dev` / value of `SEED_ADMIN_PASSWORD`
-- Viewer: `viewer@cloudpulse.dev` / value of `SEED_VIEWER_PASSWORD`
+Run the complete test suite:
+pytest
 
+Demo Scenario
+CloudPulse includes built-in endpoints for demonstrating different service conditions.
+
+A slow endpoint can transition:
+UP → DEGRADED
+
+A failing endpoint can transition:
+UP → DEGRADED → DOWN
+
+After recovery:
+DOWN → UP → ALERT RESOLVED
+
+This demonstrates the complete monitoring and alert lifecycle through the dashboard.
 ## Screenshots
-_Add screenshots of the dashboard, services page and alerts page here after running the project (save them in `docs/`)._
 
-## Future Improvements
-Alembic migrations, email/Slack notifications, per-service custom rules, data retention job, refresh tokens, CI pipeline.
+### Dashboard
 
-## License
-MIT
+![CloudPulse Dashboard](docs/dashboard.png)
+
+### Services
+
+![CloudPulse Services](docs/services.png)
+
+### Alerts
+
+![CloudPulse Alerts](docs/alerts.png)
+
+Engineering Highlights
+CloudPulse demonstrates:
+- Asynchronous task execution
+- Scheduled background processing
+- Distributed worker architecture
+- Redis caching and pub/sub
+- WebSocket-based real-time communication
+- Relational database modeling
+- JWT authentication
+- Role-based authorization
+- Failure-state transitions
+- Alert escalation and recovery
+- Dockerized multi-service development
+- Automated API and logic testing
+Future Improvements
+- Alembic database migrations
+- Email / Slack / webhook notifications
+- Per-service alert thresholds
+- Configurable retry policies
+- Data retention jobs
+- Refresh-token authentication
+- CI/CD pipeline
+- Cloud deployment
+- Metrics and distributed tracing
+- Multi-tenant monitoring
+License
+MIT License.
+
+### After pasting
+
+**Don't run Git commands yet.** Just:
+
+1. `Ctrl + A`
+2. Paste the entire README above
+3. Save with `Ctrl + S`
+4. Tell me **“README done”**
+
+Then we'll do the **next step only**: add the actual screenshots to the `docs` folder and make the README look complete on GitHub.
