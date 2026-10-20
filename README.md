@@ -143,6 +143,10 @@ cloudpulse/
 │   └── tests/
 ├── frontend/
 │   └── src/
+├── docs/
+│   ├── dashboard.png
+│   ├── services.png
+│   └── alerts.png
 ├── docker-compose.yml
 ├── .env.example
 ├── .gitignore
@@ -280,19 +284,12 @@ After recovery:
 DOWN → UP → ALERT RESOLVED
 
 This demonstrates the complete monitoring and alert lifecycle through the dashboard.
-## Screenshots
+Screenshots
+Dashboard
 
-### Dashboard
+Services
 
-![CloudPulse Dashboard](docs/dashboard.png)
-
-### Services
-
-![CloudPulse Services](docs/services.png)
-
-### Alerts
-
-![CloudPulse Alerts](docs/alerts.png)
+Alerts
 
 Engineering Highlights
 CloudPulse demonstrates:
@@ -322,13 +319,3 @@ Future Improvements
 License
 MIT License.
 
-### After pasting
-
-**Don't run Git commands yet.** Just:
-
-1. `Ctrl + A`
-2. Paste the entire README above
-3. Save with `Ctrl + S`
-4. Tell me **“README done”**
-
-Then we'll do the **next step only**: add the actual screenshots to the `docs` folder and make the README look complete on GitHub.
